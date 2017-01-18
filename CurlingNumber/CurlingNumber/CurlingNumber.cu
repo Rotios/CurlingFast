@@ -1,3 +1,5 @@
+//(c) 2017 John Freeman and Jose Rivas
+
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
