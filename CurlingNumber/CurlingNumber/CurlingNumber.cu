@@ -8,6 +8,7 @@
 #include <stdlib.h>
 
 #define INITIAL_CAPACITY 1024
+#define X(r, c) ((r * r) + r) * 0.5f + c 
 
 /******************** Find the min value **************************/
 __global__ void minCompare(int *a, int *set, bool *check, int *capacity) {
