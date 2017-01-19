@@ -6,9 +6,10 @@
 #include <stdio.h>
 #include <time.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define INITIAL_CAPACITY 1024
-#define X(r, c) ((r * r) + r) * 0.5f + c 
+#define X(r, c) ((r * r) + r) * 0.5 + c 
 
 /******************** Find the min value **************************/
 __global__ void minCompare(int *a, int *set, bool *check, int *capacity) {
@@ -170,80 +171,72 @@ void printTable(int *table, int length, int capacity) {
     free(CPUTable);
 }
 
-__global__ void fillColumn(int *sequence, int *table, int *seqPosition, int *cap) {
-    int row = threadIdx.x + blockIdx.x * blockDim.x;
-    int index = *seqPosition;
-    int capacity = *cap;
-    int value = 1;
-    
-    if(row == index){}
-    else if(sequence[index - (row + 1)] == sequence[index]) {
-        int t = table[(row * capacity) + (index - (row + 1))];
-        if(t == 0) {
-            value = 2;
-        } else {
-            value = table[(row * capacity) + (index - (row + 1))] + 1;
-        }
-    }
+// Magic if it works
+__global__ void fillRow(char *table, char *sequence, int *index) {
+    int column = threadIdx.x + blockIdx.x * blockDim.x;
+    int row = *index;
+    int pastSequencePos = row - (column + 1);
+    int position = X(row, column);
+    int position2 = (pastSequencePos > column) * X(pastSequencePos, column);
 
-    table[(row * capacity) + index] = value;
+    table[position] += 1 + sequence[pastSequencePos] == sequence[row] * (((pastSequencePos > column) * (table[position2])) + (pastSequencePos <= column));
 }
 
-void initializeTable(int *sequence, int *table, int length, int capacity) {
-
+void initializeTable(char *table, char *sequence, int seqLength) {
+    
     int *index;
     cudaMalloc((void **)&index, sizeof(int));
-    int *cap;
-    cudaMalloc((void **)&cap, sizeof(int));
-    cudaMemcpy(cap, (void *)&capacity, sizeof(int), cudaMemcpyHostToDevice);
 
-    for(int i(0); i < length; ++i) {
+    for(int i(0); i < seqLength; ++i) {
         cudaMemcpy(index, (void *)&i, sizeof(int), cudaMemcpyHostToDevice);
-        fillColumn<<< dim3(i + 1, 1), 1 >>>(sequence, table, index, cap);
+        fillRow<<< dim3(i + 1, 1), 1 >>>(table, sequence, index);
     }
 
     cudaFree(index);
 }
 
 int main() {
-    int *table;
+    char *table;
+    char *sequence;
+    char *temps;
+    bool *comparisons;
+    int *size;
+    int *cuda_capacity;
     int capacity = INITIAL_CAPACITY;
 
-    cudaMalloc((void**)&table, (INITIAL_CAPACITY * INITIAL_CAPACITY) * sizeof(int));
+    // ((capacity + 1) * capacity) / 2 for table
+    int table_size = (((capacity + 1) * capacity) / 2);
+
+    // size needed for bool arrays in min and max functions
+    int compare_size = (((capacity / 2) + 1) * (capacity / 2)) / 2;
+
+    cudaMalloc((void**)&table, table_size * sizeof(char));
+    cudaMalloc((void**)&sequence, capacity * sizeof(char));
+    cudaMalloc((void**)&temps, capacity * sizeof(char));
+    cudaMalloc((void**)&comparisons, compare_size * sizeof(bool));
+    cudaMalloc((void**)&size, sizeof(int));
+    cudaMalloc((void**)&cuda_capacity, sizeof(int));
+    cudaMemcpy(cuda_capacity, (int*)&capacity, sizeof(int), cudaMemcpyHostToDevice);
 
     while (1) {
 
-        cudaMemset(table, 0, (capacity * capacity) * sizeof(int));
+        cudaMemset(table, 0, table_size * sizeof(int));
+        cudaMemset(comparisons, 0xFFFF, compare_size * sizeof(bool));
         
-        char buffer[100];
+        char buffer[INITIAL_CAPACITY];
         printf("Input a sequence to curl:\n");
         scanf("%s", buffer);
 
-        int i(0);
-        int sequence[INITIAL_CAPACITY];
-        for (; buffer[i] != '\0'; ++i) {
-            sequence[i] = buffer[i] - '0';
-        }
+        int seqLength = strlen(buffer);
+        cudaMemcpy(sequence, buffer, seqLength * sizeof(char), cudaMemcpyHostToDevice);
+        cudaMemcpy(size, (int*)&seqLength, sizeof(int), cudaMemcpyHostToDevice);
 
-        int seqLength = i;
-        int sequenceByteSize = seqLength * sizeof(int);
-        int *cudaSequence;
-        cudaMalloc((void**)&cudaSequence, sequenceByteSize);
-        cudaMemcpy(cudaSequence, sequence, sequenceByteSize, cudaMemcpyHostToDevice);
-
-        initializeTable(cudaSequence, table, seqLength, capacity);
+        initializeTable(table, sequence, sequenceLength);
 
         clock_t start = clock();
 
-        int *size;
-        cudaMalloc((void**)&size, sizeof(int));
-        int *cap;
-        cudaMalloc((void **)&cap, sizeof(int));
-        cudaMemcpy(cap, (void *)&capacity, sizeof(int), cudaMemcpyHostToDevice);
-        int curl = (seqLength == 1) ? 1: 0;
-
-        while(curl != 1) {
-            curl = findCurl(cudaSequence, table, seqLength, capacity);
+        for(int i(0); i < capacity; i++) {
+            findCurl(cudaSequence, table, seqLength, capacity);
             printf("curl = %d\n", curl);
             printTable(table, seqLength, capacity);
             sequence[seqLength] = curl;
@@ -251,7 +244,7 @@ int main() {
             sequenceByteSize = ++seqLength * sizeof(int);
             cudaMalloc((void**)&cudaSequence, sequenceByteSize);
             cudaMemcpy(cudaSequence, sequence, sequenceByteSize, cudaMemcpyHostToDevice);
-            fillColumn<<< dim3(seqLength, 1), 1 >>>(cudaSequence, table, size, cap);
+            fillRow<<< dim3(seqLength, 1), 1 >>>(cudaSequence, table, size, cap);
         }
 
         clock_t stop = clock();
