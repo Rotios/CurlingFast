@@ -34,12 +34,43 @@ __global__ void minCompare(int *a, int *set, bool *check, int *capacity) {
     }
 }
 
-__global__ void cudaMin(int *a, int *set, bool *check, int* min, int *capacity) {
-    int idx = blockIdx.x;
+__global__ void minCompare(char *table, char *temps, bool *comparisons, int *size) {
+
+    int colIdx = threadIdx.x;
+    int colIdy = threadIdx.y;
+    int rowIdx = blockIdx.x * blockDim.x;
+    int rowIdy = blockIdx.y * blockDim.y;
+
+    int seqLength = *size;
+    int tabRowIdx = (seqLength) - 1 - rowIdx;
+    int tabRowIdy = (seqLength) - 1 - rowIdy;
+
+    int tabIdx = X(tabRowIdx, colIdx);
+    int tabIdy = X(tabRowIdy, colIdy);
+    int boolId = X(rowIdx, colIdx);
+
+    //if (idx == idy) { return; }
+
+    char xval = ((colIdx + tabRowIdx + 1) >= seqLength) * table[tabIdx];
+    char yval = ((colIdx + tabRowIdx + 1) >= seqLength) * table[tabIdy];
+    
+    if(yval == '0' || yval == xval) {}
+    else if (xval == '0' || xval > yval) {
+        comparisons[boolId] = false;
+    }
+
+    // Column <= row for boolean
+    //comparisons[boolId] = (xval != 0) || (xval < yval);  
+}
+
+__global__ void cudaMin(bool *comparisons, int *size) {
+    int idx = X(blockIdx.x, blockIdx.y);
 
     if (check[idx]) {
         min[0] = a[idx + capacity[0] + set[0]];
     }
+
+    comparisons[idx] = true;
 }
 
 /************************* Find the max value **********************/
@@ -129,31 +160,19 @@ int findMax(int *arr, const int length) {
 }
 
 /********************* Find the Curl *****************************************/
-int findCurl(int *sequence, int *table, int length, int capacity){
-    int *tempResults;
-    cudaMalloc((void **) &tempResults, (length >> 1) * sizeof(int));
-    int *cap;
-    cudaMalloc((void **) &cap, sizeof(int));
-    cudaMemcpy(cap, (int*)&capacity, sizeof(int), cudaMemcpyHostToDevice);
+void findCurl(char *table, char *sequence, char *temps, bool *comparisons, int *size, int seqLength){
 
-    for(int i(0); i < (length >> 1); ++i) {
+    /*for(int i(0); i < (length >> 1); ++i) {
         //int *p = &(table[i][(length - 1) - i]);
         //findMin(p, length, &(tempResults[i]));
-        findMin(table, i+1, (length - 1) - i, &(tempResults[i]), cap);
-    }
+        findMin(table, i+1, (length - 1) - i, &(tempResults[i]));
+    }*/
 
-    int *results = (int *) malloc((length >> 1) * sizeof(int));
-    cudaMemcpy(results, tempResults, (length >> 1) * sizeof(int), cudaMemcpyDeviceToHost);
-    for(int i(0); i < (length >> 1); ++i) {
-        printf("%d ", results[i]);
-    }
-    printf("\n");
+    int numBlocks = seqLength >> 1;
+    minCompare<<< dim3(numBlocks, numBlocks), numBlocks >>> (table, temps, comparisons, size);
+    cudaMin<<< dim3(seqLength, seqLength), 1 >>>(arr, set, check, minimum, row2);
 
     int curl = findMax(tempResults, length);
-
-    cudaFree(tempResults);
-
-    return curl;
 }
 
 void printTable(int *table, int length, int capacity) {
@@ -179,7 +198,7 @@ __global__ void fillRow(char *table, char *sequence, int *index) {
     int position = X(row, column);
     int position2 = (pastSequencePos > column) * X(pastSequencePos, column);
 
-    table[position] += 1 + sequence[pastSequencePos] == sequence[row] * (((pastSequencePos > column) * (table[position2])) + (pastSequencePos <= column));
+    table[position] += '1' + (sequence[pastSequencePos] == sequence[row]) * (((pastSequencePos > column) * (table[position2] - '0')) + (pastSequencePos <= column));
 }
 
 void initializeTable(char *table, char *sequence, int seqLength) {
@@ -231,12 +250,12 @@ int main() {
         cudaMemcpy(sequence, buffer, seqLength * sizeof(char), cudaMemcpyHostToDevice);
         cudaMemcpy(size, (int*)&seqLength, sizeof(int), cudaMemcpyHostToDevice);
 
-        initializeTable(table, sequence, sequenceLength);
+        initializeTable(table, sequence, seqLength);
 
         clock_t start = clock();
 
         for(int i(0); i < capacity; i++) {
-            findCurl(cudaSequence, table, seqLength, capacity);
+            findCurl(table, sequence, seqLength);
             printf("curl = %d\n", curl);
             printTable(table, seqLength, capacity);
             sequence[seqLength] = curl;
