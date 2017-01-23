@@ -12,67 +12,43 @@
 #define X(r, c) ((r * r) + r) * 0.5 + c 
 
 /******************** Find the min value **************************/
-__global__ void minCompare(int *a, int *set, bool *check, int *capacity) {
-    int cap = capacity[0];
-    int offset = set[0];
-
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int idy = threadIdx.y + blockIdx.y * blockDim.y;
-    int tabx = idx + cap + offset;
-    int taby = idy + cap + offset;
-
-    if (idx == idy) { return; }
-
-    int xval = a[tabx];
-    int yval = a[taby];
-
-    if (yval == 0) {}
-    else if (xval == 0) {
-        check[idx] = false;
-    }
-    else if (xval > yval) {
-        check[idx] = false;
-    }
-}
-
 __global__ void minCompare(char *table, char *temps, bool *comparisons, int *size) {
 
     int colIdx = threadIdx.x;
-    int colIdy = threadIdx.y;
+
     int rowIdx = blockIdx.x * blockDim.x;
     int rowIdy = blockIdx.y * blockDim.y;
 
     int seqLength = *size;
-    int tabRowIdx = (seqLength)-1 - rowIdx;
-    int tabRowIdy = (seqLength)-1 - rowIdy;
 
+    // Work backwards on the table rows
+    int tabRowIdx = (seqLength) - 1 - rowIdx;
+    int tabRowIdy = (seqLength) - 1 - rowIdy;
+
+    // Get the index of the value we are looking at
     int tabIdx = X(tabRowIdx, colIdx);
-    int tabIdy = X(tabRowIdy, colIdy);
-    int boolId = X(rowIdx, colIdx);
+    int tabIdy = X(tabRowIdy, colIdx);
 
-    //if (idx == idy) { return; }
+    int boolId = seqLength * colIdx + rowIdx;
 
-    char xval = ((colIdx + tabRowIdx + 1) >= seqLength) * table[tabIdx];
-    char yval = ((colIdx + tabRowIdx + 1) >= seqLength) * table[tabIdy];
+    int xval = ((colIdx + tabRowIdx + 1) >= seqLength) * (table[tabIdx] - '0');
+    int yval = ((colIdx + tabRowIdx + 1) >= seqLength) * (table[tabIdy] - '0');
 
-    if (yval == '0' || yval == xval) {}
-    else if (xval == '0' || xval > yval) {
+    if (yval == 0 || yval == xval) {}
+    else if (xval == 0 || xval > yval) {
         comparisons[boolId] = false;
     }
-
-    // Column <= row for boolean
-    //comparisons[boolId] = (xval != 0) || (xval < yval);  
 }
 
-__global__ void cudaMin(char *table, int *temps, bool *comparisons, int *size) {
-    int idx = X(blockIdx.x, blockIdx.y);
+__global__ void cudaMin(char *table, char *temps, bool *comparisons, int *size) {
+    int idxx = *size * blockIdx.y + blockIdx.x;
     int idx = X(*size - 1 - blockIdx.x, blockIdx.y);
 
-    if (comparisons[idx]) {
-        temps[idx] = table[idx];
+    if (comparisons[idxx]) {
+        temps[idxx] = table[idx];
     }
 
-    comparisons[idx] = true;
+    comparisons[idxx] = true;
 }
 
 /************************* Find the max value **********************/
@@ -96,15 +72,177 @@ __global__ void cudaMax(char *a, bool *check, int* size, int *max) {
     if (check[idx]) {
         max[0] = a[idx];
     }
+    size++;
 }
 
 /*********************** Helper Methods ********************************************/
-__global__ void cudaBoolFill(bool *arr, int length) {
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if (i < length) {
-        arr[i] = true;
+// Magic if it works
+__global__ void fillRow(char *table, char *sequence, int *index) {
+    int column = threadIdx.x + blockIdx.x * blockDim.x;
+    int row = *index;
+    int pastSequencePos = row - (column + 1);
+    int position = X(row, column);
+    int position2 = (pastSequencePos > column) * X(pastSequencePos, column);
+
+    table[position] += '1' + (sequence[pastSequencePos] == sequence[row]) * (((pastSequencePos > column) * (table[position2] - '0')) + (pastSequencePos <= column));
+}
+
+void initializeTable(char *table, char *sequence, int seqLength) {
+
+    int *index;
+    cudaMalloc((void **)&index, sizeof(int));
+
+    for (int i(0); i < seqLength; ++i) {
+        cudaMemcpy(index, (void *)&i, sizeof(int), cudaMemcpyHostToDevice);
+        fillRow << < dim3(i + 1, 1), 1 >> > (table, sequence, index);
+    }
+
+    cudaFree(index);
+}
+
+void printBoolArray(bool *comparisons, int size){
+    
+    bool *comp;
+    comp = (bool *)malloc(size * sizeof(bool));
+
+    cudaMemcpy(comp, comparisons, size * sizeof(bool), cudaMemcpyDeviceToHost);
+
+    while(comp){
+        printf("%d ", *comp++);
+    }
+
+    printf("\n");
+}
+
+void printTable(char *table, int length) {
+    char *CPUTable;
+    CPUTable = (char *)malloc(length * sizeof(char));
+    cudaMemcpy(CPUTable, table, length * sizeof(char), cudaMemcpyDeviceToHost);
+    length = strlen(CPUTable);
+    for (int i(0); i < length; ++i) {
+        printf("%c ", CPUTable[i]);
+    }
+    
+        printf("\n");
+    free(CPUTable);
+}
+
+/********************* Find the Curl *****************************************/
+void findCurl(char *table, char *sequence, char *temps, bool *comparisons, int *size, int *curl, int seqLength) {
+
+    int numBlocks = seqLength >> 1;
+    minCompare << < dim3(numBlocks, numBlocks), numBlocks >> > (table, temps, comparisons, size);
+    //printBoolArray(comparisons, 16);
+    cudaMin << < dim3(numBlocks, numBlocks), 1 >> > (table, temps, comparisons, size);
+
+    numBlocks = (numBlocks * numBlocks) * 0.5f;
+    maxCompare << < dim3(numBlocks, numBlocks), numBlocks >> > (temps, comparisons, size);
+    cudaMax << < dim3(numBlocks, numBlocks), 1 >> > (sequence, comparisons, size, curl);
+
+    if (seqLength < INITIAL_CAPACITY) {
+        int len = *size++;
+        sequence[len] = *curl;
     }
 }
+
+int main() {
+    char *table;
+    char *sequence;
+    char *temps;
+    bool *comparisons;
+    int *size;
+    int *cuda_capacity;
+    int *curl;
+    int capacity = INITIAL_CAPACITY;
+
+    // ((capacity + 1) * capacity) / 2 for table
+    int table_size = (((capacity + 1) * capacity) / 2);
+
+    // size needed for bool arrays in min and max functions
+    int compare_size = (capacity / 2) * (capacity / 2);
+
+    cudaMalloc((void**)&table, table_size * sizeof(char));
+    cudaMalloc((void**)&sequence, capacity * sizeof(char));
+    cudaMalloc((void**)&temps, capacity * sizeof(char));
+    cudaMalloc((void**)&comparisons, compare_size * sizeof(bool));
+    cudaMalloc((void**)&size, sizeof(int));
+    cudaMalloc((void**)&cuda_capacity, sizeof(int));
+    cudaMalloc((void**)&curl, 2 * sizeof(int));
+    cudaMemcpy(cuda_capacity, (int*)&capacity, sizeof(int), cudaMemcpyHostToDevice);
+
+    
+    bool *allTrues = (bool *) malloc(compare_size * sizeof(bool));
+    memset(allTrues, true, compare_size * sizeof(bool));
+    cudaMemcpy(comparisons, allTrues, compare_size * sizeof(bool), cudaMemcpyHostToDevice);
+
+    while (1) {
+
+        cudaMemset(table, '0', table_size * sizeof(char));
+
+        char buffer[INITIAL_CAPACITY];
+        printf("Input a sequence to curl:\n");
+        scanf("%s", buffer);
+
+        int seqLength = strlen(buffer);
+        cudaMemcpy(sequence, buffer, seqLength * sizeof(char), cudaMemcpyHostToDevice);
+        cudaMemcpy(size, (int*)&seqLength, sizeof(int), cudaMemcpyHostToDevice);
+
+        initializeTable(table, sequence, seqLength);
+        printTable(table, ((seqLength + 1) * seqLength)/2);
+        clock_t start = clock();
+
+        for (int i(seqLength); i < capacity; i++) {
+            findCurl(table, sequence, temps, comparisons, size, curl, seqLength);
+            fillRow << < dim3(seqLength++, 1), 1 >> > (table, sequence, size);
+        }
+
+        clock_t stop = clock();
+        double elapsed = ((double)(stop - start)) / CLOCKS_PER_SEC;
+        printf("Elapsed time: %.3fs\n", elapsed);
+/*
+        char *seq = (char *) malloc(INITIAL_CAPACITY*sizeof(char));
+        
+        cudaMemcpy(seq, (int*)&sequence, seqLength * sizeof(char), cudaMemcpyDeviceToHost);
+        for (int i = 0; i < seqLength; ++i) {
+            printf("%c ", seq[i]);
+        }*/
+        printf("\n\n");
+    }
+    
+
+        cudaFree(table);
+        cudaFree(sequence);
+        cudaFree(temps);
+        cudaFree(comparisons);
+        cudaFree(size);
+        cudaFree(cuda_capacity);
+        cudaFree(curl);
+    return 0;
+}
+
+/*
+__global__ void minCompare(int *a, int *set, bool *check, int *capacity) {
+    int cap = capacity[0];
+    int offset = set[0];
+
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int idy = threadIdx.y + blockIdx.y * blockDim.y;
+    int tabx = idx + cap + offset;
+    int taby = idy + cap + offset;
+
+    if (idx == idy) { return; }
+
+    int xval = a[tabx];
+    int yval = a[taby];
+
+    if (yval == 0) {}
+    else if (xval == 0) {
+        check[idx] = false;
+    }
+    else if (xval > yval) {
+        check[idx] = false;
+    }
+}*/
 
 ///********************** Min and Max Functions ******************************************/
 //void findMin(int *arr, const int length, const int offset, int *minimum, int *capacity) {
@@ -160,139 +298,3 @@ __global__ void cudaBoolFill(bool *arr, int length) {
 //
 //    return maxhost[0];
 //}
-
-/********************* Find the Curl *****************************************/
-void findCurl(char *table, char *sequence, char *temps, bool *comparisons, int *size, int *curl, int seqLength) {
-
-    /*for(int i(0); i < (length >> 1); ++i) {
-        //int *p = &(table[i][(length - 1) - i]);
-        //findMin(p, length, &(tempResults[i]));
-        findMin(table, i+1, (length - 1) - i, &(tempResults[i]));
-    }*/
-
-    int numBlocks = seqLength >> 1;
-    minCompare << < dim3(numBlocks, numBlocks), numBlocks >> > (table, temps, comparisons, size);
-    cudaMin << < dim3(numBlocks, numBlocks), 1 >> > (table, temps, comparisons, size);
-
-    numBlocks = (numBlocks * numBlocks) * 0.5f;
-    maxCompare << < dim3(numBlocks, numBlocks), numBlocks >> > (temps, comparisons, size);
-    cudaMax << < dim3(numBlocks, numBlocks), 1 >> > (sequence, comparisons, size, curl);
-
-    if (seqLength < INITIAL_CAPACITY) {
-        int len = *size++;
-        sequence[len] = *curl;
-    }
-}
-
-void printTable(int *table, int length, int capacity) {
-    int *CPUTable;
-    CPUTable = (int *)malloc(capacity * capacity * sizeof(int));
-    cudaMemcpy(CPUTable, table, capacity * capacity * sizeof(int), cudaMemcpyDeviceToHost);
-
-    for (int i(0); i < length; ++i) {
-        for (int j(0); j < length; ++j) {
-            printf("%d ", CPUTable[(i * capacity) + j]);
-        }
-        printf("\n");
-    }
-
-    free(CPUTable);
-}
-
-// Magic if it works
-__global__ void fillRow(char *table, char *sequence, int *index) {
-    int column = threadIdx.x + blockIdx.x * blockDim.x;
-    int row = *index;
-    int pastSequencePos = row - (column + 1);
-    int position = X(row, column);
-    int position2 = (pastSequencePos > column) * X(pastSequencePos, column);
-
-    table[position] += '1' + (sequence[pastSequencePos] == sequence[row]) * (((pastSequencePos > column) * (table[position2] - '0')) + (pastSequencePos <= column));
-}
-
-void initializeTable(char *table, char *sequence, int seqLength) {
-
-    int *index;
-    cudaMalloc((void **)&index, sizeof(int));
-
-    for (int i(0); i < seqLength; ++i) {
-        cudaMemcpy(index, (void *)&i, sizeof(int), cudaMemcpyHostToDevice);
-        fillRow << < dim3(i + 1, 1), 1 >> > (table, sequence, index);
-    }
-
-    cudaFree(index);
-}
-
-int main() {
-    char *table;
-    char *sequence;
-    char *temps;
-    bool *comparisons;
-    int *size;
-    int *cuda_capacity;
-    int *curl;
-    int capacity = INITIAL_CAPACITY;
-
-    // ((capacity + 1) * capacity) / 2 for table
-    int table_size = (((capacity + 1) * capacity) / 2);
-
-    // size needed for bool arrays in min and max functions
-    int compare_size = (((capacity / 2) + 1) * (capacity / 2)) / 2;
-
-    cudaMalloc((void**)&table, table_size * sizeof(char));
-    cudaMalloc((void**)&sequence, capacity * sizeof(char));
-    cudaMalloc((void**)&temps, capacity * sizeof(char));
-    cudaMalloc((void**)&comparisons, compare_size * sizeof(bool));
-    cudaMalloc((void**)&size, sizeof(int));
-    cudaMalloc((void**)&cuda_capacity, sizeof(int));
-    cudaMalloc((void**)&curl, 2 * sizeof(int));
-    cudaMemcpy(cuda_capacity, (int*)&capacity, sizeof(int), cudaMemcpyHostToDevice);
-
-    while (1) {
-
-        cudaMemset(table, 0, table_size * sizeof(int));
-        cudaMemset(comparisons, 0xFFFF, compare_size * sizeof(bool));
-
-        char buffer[INITIAL_CAPACITY];
-        printf("Input a sequence to curl:\n");
-        scanf("%s", buffer);
-
-        int seqLength = strlen(buffer);
-        cudaMemcpy(sequence, buffer, seqLength * sizeof(char), cudaMemcpyHostToDevice);
-        cudaMemcpy(size, (int*)&seqLength, sizeof(int), cudaMemcpyHostToDevice);
-
-        initializeTable(table, sequence, seqLength);
-
-        clock_t start = clock();
-
-        for (int i(0); i < capacity; i++) {
-            findCurl(table, sequence, temps, comparisons, size, curl, seqLength);/*
-            printf("curl = %d\n", curl);
-            printTable(table, seqLength, capacity);
-            sequence[seqLength] = curl;
-            cudaMemcpy(size, (int*)&seqLength, sizeof(int), cudaMemcpyHostToDevice);
-            sequenceByteSize = ++seqLength * sizeof(int);
-            cudaMalloc((void**)&cudaSequence, sequenceByteSize);
-            cudaMemcpy(cudaSequence, sequence, sequenceByteSize, cudaMemcpyHostToDevice);*/
-            fillRow << < dim3(seqLength, 1), 1 >> > (table, sequence, size++);
-        }
-
-        clock_t stop = clock();
-        double elapsed = ((double)(stop - start)) / CLOCKS_PER_SEC;
-        printf("Elapsed time: %.3fs\n", elapsed);
-
-        for (int i = 0; i < seqLength; ++i) {
-            printf("%d ", sequence[i]);
-        }
-
-        cudaFree(table);
-        cudaFree(sequence);
-        cudaFree(temps);
-        cudaFree(comparisons);
-        cudaFree(size);
-        cudaFree(cuda_capacity);
-        cudaFree(curl);
-        printf("\n\n");
-    }
-    return 0;
-}
