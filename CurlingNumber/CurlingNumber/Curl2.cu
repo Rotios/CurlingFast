@@ -53,23 +53,33 @@ __global__ void maxCompare(char *a, bool *check, int *size) {
     }
 }
 
-__global__ void cudaMax(char *a, bool *check, int* size, int *max) {
+__global__ void cudaMax(char *temps, bool *comparisons, int* size, char *sequence) {
     int idx = blockIdx.x;
 
-    if (check[idx]) {
-        max[0] = a[idx];
+    if (comparisons[idx]) {
+        sequence[(*size)++] = temps[idx];
     }
-    size++;
+    comparisons[idx] = true;
 }
 
 // Magic if it works
-__global__ void fillRow(char *table, char *sequence, int *index) {
+__global__ void fillRow(char *table, char *sequence, int *size) {
+    int column = threadIdx.x + blockIdx.x * blockDim.x;
+    int row = *size - 1;
+    int pastSequencePos = row - (column + 1);
+    int position = X(row, column);
+    int position2 = (pastSequencePos > column) * X(pastSequencePos, column);
+    
+    table[position] += '1' + (sequence[pastSequencePos] == sequence[row]) * (((pastSequencePos > column) * (table[position2] - '0')) + (pastSequencePos <= column));
+}
+
+__global__ void fillInitialRow(char *table, char *sequence, int *index) {
     int column = threadIdx.x + blockIdx.x * blockDim.x;
     int row = *index;
     int pastSequencePos = row - (column + 1);
     int position = X(row, column);
     int position2 = (pastSequencePos > column) * X(pastSequencePos, column);
-
+    
     table[position] += '1' + (sequence[pastSequencePos] == sequence[row]) * (((pastSequencePos > column) * (table[position2] - '0')) + (pastSequencePos <= column));
 }
 
@@ -80,7 +90,7 @@ void initializeTable(char *table, char *sequence, int seqLength) {
 
     for (int i(0); i < seqLength; ++i) {
         cudaMemcpy(index, (void *)&i, sizeof(int), cudaMemcpyHostToDevice);
-        fillRow << < dim3(i + 1, 1), 1 >> > (table, sequence, index);
+        fillInitialRow << < dim3(i + 1, 1), 1 >> > (table, sequence, index);
     }
 
     cudaFree(index);
@@ -135,31 +145,39 @@ __global__ void minCompare(char *table, char *temps, bool *comparisons, int *siz
 
 }
 
-void findCurl(char *table, char *sequence, char *temps, bool *comparisons, int *size, int *curl, int seqLength) {
+void findCurl(char *table, char *sequence, char *temps, bool *comparisons, int *size, int *curl, int& seqLength) {
 
     int numBlocks = seqLength >> 1;
     minCompare << < numBlocks, dim3(numBlocks, numBlocks) >> > (table, temps, comparisons, size);
-    printBoolArray(comparisons, 1000);
+    //printBoolArray(comparisons, 1000);
     cudaMin << < dim3(numBlocks, numBlocks), 1 >> > (table, temps, comparisons, size);
 
     char *mins;
     mins = (char *)malloc(1000 * sizeof(char));
 
-    cudaMemcpy(mins, temps, seqLength * seqLength * sizeof(char), cudaMemcpyDeviceToHost);
-    printf("temps =  ");
-    for (int i(0); i < seqLength * seqLength; ++i) {
+    //cudaMemcpy(mins, temps, seqLength * seqLength * sizeof(char), cudaMemcpyDeviceToHost);
+    //printf("temps =  ");
+    //for (int i(0); i < seqLength * seqLength; ++i) {
+    //    printf("%c ", mins[i]);
+    //}
+
+    //printf("\n");
+
+    maxCompare << < dim3(numBlocks, numBlocks), 1 >> > (temps, comparisons, size);
+    cudaMax << < dim3(numBlocks, numBlocks), 1 >> > (temps, comparisons, size, sequence);
+
+   
+    cudaMemcpy(mins, sequence, seqLength * seqLength * sizeof(char), cudaMemcpyDeviceToHost);
+    printf("sequence =  ");
+    for (int i(0); i < seqLength + 1; ++i) {
         printf("%c ", mins[i]);
     }
 
     printf("\n");
 
-    maxCompare << < dim3(numBlocks, numBlocks), 1 >> > (temps, comparisons, size);
-    cudaMax << < dim3(numBlocks, numBlocks), 1 >> > (temps, comparisons, size, sequence);
-
-    /*if (seqLength < INITIAL_CAPACITY) {
-        int len = *size++;
-        sequence[len] = *curl;
-    }*/
+    //int s[1];
+    //cudaMemcpy(s, size, sizeof(int), cudaMemcpyDeviceToHost);
+    //printf("size = %d  \n", *s);
 }
 
 
@@ -205,12 +223,14 @@ int main() {
         cudaMemcpy(size, (int*)&seqLength, sizeof(int), cudaMemcpyHostToDevice);
 
         initializeTable(table, sequence, seqLength);
-        printf("%d\n\n", seqLength);
         printTable(table, (seqLength * (seqLength + 1)) / 2);
 
-        for (int i(0); i < 1; i++) {
+        for (int i(0); i < 5; i++) {
             findCurl(table, sequence, temps, comparisons, size, curl, seqLength);
-            //fillRow << < dim3(seqLength++, 1), 1 >> > (table, sequence, size);
+            seqLength++;
+            fillRow << < dim3(seqLength, 1), 1 >> > (table, sequence, size);
+
+            printTable(table, (seqLength * (seqLength + 1)) / 2);
         }
 
         printf("\n\n");
