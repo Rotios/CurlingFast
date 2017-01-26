@@ -19,7 +19,6 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="Curl2.cu" />
     <CudaCompile Include="CurlingNumber.cu" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

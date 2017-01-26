@@ -188,29 +188,39 @@ int main() {
 
         cudaMemset(table, 0, table_size * sizeof(char));
 
-        char buffer[INITIAL_CAPACITY];
+        char *buffer = (char *) calloc(capacity, sizeof(char));
         printf("Input a sequence to curl:\n");
         scanf("%s", buffer);
 
+        clock_t start = clock();
+
         int seqLength = strlen(buffer);
-        cudaMemcpy(sequence, buffer, seqLength * sizeof(char), cudaMemcpyHostToDevice);
+
+        cudaMemcpy(sequence, buffer, capacity * sizeof(char), cudaMemcpyHostToDevice);
         cudaMemcpy(size, (int*)&seqLength, sizeof(int), cudaMemcpyHostToDevice);
+        
+        free(buffer);
 
         initializeTable(table, sequence, seqLength);
 
-        int end = capacity - seqLength ;
+        int end = capacity - seqLength;
 
         for (int i(0); i < end; i++) {
             findCurl(table, sequence, temps, comparisons, size, curl, seqLength);
             seqLength++;
             fillRow << < dim3(seqLength, 1), 1 >> > (table, sequence, size);
         }
-
+        
+        clock_t stop = clock();
+        double elapsed = ((double)(stop - start)) / CLOCKS_PER_SEC;
+        printf("Elapsed time: %.3fs\n", elapsed);
         cudaMemcpy(seq, sequence, capacity * sizeof(char), cudaMemcpyDeviceToHost);
-        for(int i = 0; i < (capacity - 1); i++) {
+
+        for(int i = 0; i < capacity; i++) {
             printf("%c ", seq[i]);
         }
         printf("\n\n");
+
     }
 
 
