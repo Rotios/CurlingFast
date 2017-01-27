@@ -12,5 +12,13 @@ Our current implementation for the Curling Number Conjecture takes a dynamic pro
 When the initial sequence is entered, the table is filled in row-by-row using the X macro. For each column C in row R, we check whether the number at index R in the initial sequence occurred at index R - C in our sequence. If it did, we set position X(R, C) in our table equal to 1 plus the value at position X(R - C, C). If X(R-C, C) falls outside of the bounds of our triangular array, we put a 2 in that position. We then store the minimum values of the last half of each of the rows in the bottom half of the table and return the maximum value of those values as the curling number for that sequence. We then add that number to the end of our sequence, fill in the new row according to that number, and run the algorithm again an arbitrary number of times.
 
 <b>Limitations:</b>
+<ul>
+<li>
 Currently, we have a bug that causes the starting sequence we would like to curl become non-deterministic. We believe that this is a bug involving the cudaMemcpy from the input sequence into the GPU memory.
+</li>
+<li>
 CUDA supports a total of 1024 threads per block. Due to this limitation, our current implementation for the Curling Number Conjecture can only solve for sequences up to 32 characters long, because we are calculating the minimum values for each row all at once. This limitation could be fixed by either finding the minimum in each row either one at a time or in batches so that the computation would only require blocks instead of threads since CUDA allows for many more blocks than threads.
+</li>
+</ul>
+<b>Acknowledgements:</b>
+We started this project in order to figure out if we could get his original implementation to solve for general curling sequences faster through CUDA. While the results were mixed, there seems to be some potential. Thank you, Duane, for your support on this project.
